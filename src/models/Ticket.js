@@ -16,7 +16,7 @@ const ticketSchema = new mongoose.Schema(
       max: QUANTITY_MAX,
       validate: { validator: Number.isInteger, message: 'quantity debe ser un entero' },
     },
-    // Código legible para el asistente (va en el correo). Lo genera el servidor, nunca el cliente.
+    // Código legible para el inscrito (va en el correo). Lo genera el servidor, nunca el cliente.
     reservationCode: { type: String, required: true, unique: true, uppercase: true, trim: true },
     // Cancelación lógica: el documento se conserva con la fecha en que se canceló
     cancelledAt: { type: Date, default: null },

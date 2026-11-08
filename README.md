@@ -708,7 +708,7 @@ dueño del evento. Filtro opcional `?status=confirmed|pending|cancelled`.
 }
 ```
 
-Del asistente solo se expone nombre y email (nunca contraseña ni rol). `403` `No tienes permisos para
+Del inscrito solo se expone nombre y email (nunca contraseña ni rol). `403` `No tienes permisos para
 realizar esta acción` con rol `user`; `403` `Solo puedes ver las inscripciones de tus propios eventos` con
 un `organizer` ajeno; `404` si el evento no existe; `400` `El filtro status debe ser uno de: confirmed,
 pending, cancelled`.
@@ -1024,7 +1024,7 @@ de tickets. Los 32 nuevos cubren esta entrega:
   reserva distintos y legibles; estados congelados. `my-tickets`: solo los propios, con `event`
   poblado (`id, title, date, location`), del más reciente al más antiguo, sin datos de otros, con
   historial de cancelados y `[]` cuando no hay. `GET /api/events/:eid/tickets`: organizer dueño →
-  `200` con `cuposOcupados`/`cuposDisponibles` (el cancelado no cuenta) y asistentes poblados sin
+  `200` con `cuposOcupados`/`cuposDisponibles` (el cancelado no cuenta) e inscritos poblados sin
   contraseña ni rol; filtro `?status=`; `user` → `403`; organizer ajeno → `403`; admin → `200`;
   inexistente → `404`; sin sesión → `401`.
 
@@ -1138,7 +1138,7 @@ Cobertura de la entrega anterior (eventos), sin cambios:
   como estado activo (ocupa cupo) para un flujo de pago futuro, sin inventar hoy una ruta que lo
   produzca.
 - **Inscribirse solo a eventos `published` y futuros.** Un borrador no es público, un cancelado o
-  finalizado no admite asistentes, y un evento publicado cuya fecha ya pasó tampoco. Los cuatro casos
+  finalizado no admite inscripciones, y un evento publicado cuya fecha ya pasó tampoco. Los cuatro casos
   responden `409` con su motivo.
 
 ## Decisiones de seguridad
@@ -1160,7 +1160,7 @@ Cobertura de la entrega anterior (eventos), sin cambios:
   (`.env` está en `.gitignore`; `.env.example` trae valores de ejemplo). El contenido del correo
   escapa el HTML de los datos del evento.
 - **El ticket pertenece a la sesión**: `user` sale siempre de `req.user`; el `GET` de inscritos de un
-  evento expone del asistente solo nombre y email (nunca contraseña ni rol) y solo al organizador
+  evento expone del inscrito solo nombre y email (nunca contraseña ni rol) y solo al organizador
   dueño o a un admin; `my-tickets` filtra por el usuario de la sesión en la consulta, no después.
 - **Entrada del listado saneada**: `location` se escapa antes de convertirse en expresión regular
   (`.*` no es un comodín); `sort` solo acepta campos de una lista; un parámetro repetido

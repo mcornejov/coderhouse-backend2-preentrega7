@@ -25,7 +25,7 @@ export default class TicketsDao {
     return Ticket.find({ user: userId }).sort({ createdAt: -1 }).populate('event', EVENTO_RESUMIDO).lean();
   }
 
-  /** Tickets de un evento en orden de llegada, con el resumen de cada asistente. */
+  /** Tickets de un evento en orden de llegada, con el resumen de cada inscrito. */
   async findByEvent(eventId, { status } = {}) {
     const consulta = { event: eventId };
     if (status) consulta.status = status;
