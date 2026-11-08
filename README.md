@@ -1000,6 +1000,10 @@ Todos los casos anteriores están automatizados:
 pnpm test
 ```
 
+Cada archivo de tests levanta su propio MongoDB en memoria, por eso el script los corre de a cuatro
+(`--test-concurrency=4`): en una máquina con poca memoria, lanzar los trece a la vez puede agotar el
+tiempo de conexión.
+
 164 tests con MongoDB en memoria. Los 132 heredados siguen pasando sin cambios (autenticación,
 roles, `/api/users`, eventos con reglas, estados y listado); la tabla 401/403 suma las cuatro rutas
 de tickets. Los 32 nuevos cubren esta entrega:
