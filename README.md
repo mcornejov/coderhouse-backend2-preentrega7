@@ -13,7 +13,7 @@ existe, está `published` y todavía no ocurrió, `quantity` válida, sin inscri
 cancelados no cuentan, así cancelar libera el cupo solo). `PATCH /api/tickets/:tid/cancel` es una
 cancelación lógica (estado + `cancelledAt`, el documento se conserva), `GET /api/tickets/my-tickets`
 muestra los propios con el evento poblado y `GET /api/events/:eid/tickets` los inscritos de un
-evento para su organizador o un admin. Al confirmar una inscripción se envía un correo con
+evento para su organizador o un admin. Al confirmar y al cancelar una inscripción se envía un correo con
 **Nodemailer** usando credenciales de entorno (`MAIL_*`). Todo lo anterior no cambia.
 
 **Pre-entrega 6:** la entidad central del dominio, los **eventos**, con su lógica de negocio
@@ -47,7 +47,7 @@ y gestionar las inscripciones de los clientes.
 | bcrypt | Hash y comparación de contraseñas |
 | jsonwebtoken | Firma del JWT (la verificación la hace `passport-jwt`) |
 | cookie-parser | Lectura de la cookie de sesión |
-| Nodemailer | Correo de confirmación de inscripción (SMTP por variables de entorno) |
+| Nodemailer | Correos de confirmación y de cancelación de inscripción (SMTP por variables de entorno) |
 | dotenv | Variables de entorno |
 | node:test + supertest + mongodb-memory-server | Tests de integración con base en memoria |
 | pnpm | Gestor de paquetes |
@@ -78,7 +78,7 @@ cp .env.example .env
 | `JWT_SECRET` | Secreto con el que se firman (controller) y verifican (estrategia `current`) los JWT. Usa un valor largo y aleatorio | Sí |
 | `JWT_EXPIRES_IN` | Expiración del JWT: número de segundos (`3600`) o duración con unidad (`15m`, `1h`, `7d`). Por defecto `1h` | No |
 | `BCRYPT_SALT_ROUNDS` | Costo del hash de bcrypt, entre 10 y 14 (por defecto 10) | No |
-| `MAIL_HOST` | Servidor SMTP para el correo de confirmación (`smtp.ethereal.email`, `smtp.gmail.com`, Mailtrap...). **Sin él el servidor arranca igual**: los correos se registran en consola y no se envían | No |
+| `MAIL_HOST` | Servidor SMTP para los correos de confirmación y cancelación (`smtp.ethereal.email`, `smtp.gmail.com`, Mailtrap...). **Sin él el servidor arranca igual**: los correos se registran en consola y no se envían | No |
 | `MAIL_PORT` | Puerto SMTP: `587` (STARTTLS, por defecto) o `465` (TLS) | No |
 | `MAIL_USER`, `MAIL_PASS` | Credenciales SMTP. Con Gmail, `MAIL_PASS` es una "contraseña de aplicación". **Nunca van en el código** | No |
 | `MAIL_FROM` | Remitente que ve el usuario (`"Café Aurora <no-reply@cafeaurora.cl>"`). Por defecto `MAIL_USER` | No |
@@ -339,8 +339,28 @@ aunque dos peticiones lleguen al mismo tiempo. Los estados y límites viven en `
 | Estado | Significa | Ocupa cupo | Cómo se llega |
 |--------|-----------|:----------:|---------------|
 | `confirmed` | Inscripción vigente | Sí | `POST /api/events/:eid/tickets` |
-| `pending` | Reservado a la espera de confirmación (previsto para un flujo de pago; hoy ninguna ruta lo produce) | Sí | — |
+| `pending` | Lugar reservado a la espera de una confirmación externa (pago) | Sí | Hoy ninguna ruta lo produce |
 | `cancelled` | Cancelada por el usuario o un admin; se conserva como historial | No | `PATCH /api/tickets/:tid/cancel` |
+
+**Cómo y cuándo se pasa de un estado a otro:**
+
+```
+POST /api/events/:eid/tickets ──► confirmed ──► cancelled   (PATCH /api/tickets/:tid/cancel)
+                                      ▲              ▲
+                         (pago)       │              │
+                        pending ──────┴──────────────┘
+```
+
+| Desde | Hacia | Cuándo |
+|-------|-------|--------|
+| (no existe) | `confirmed` | Al inscribirse. La inscripción no requiere pago en línea, así que no hay nada que esperar: si pasa las validaciones y hay cupo, nace confirmada y se envía el correo de confirmación |
+| `confirmed` | `cancelled` | El dueño del ticket o un admin la cancela. Se registra `cancelledAt`, el cupo queda libre y se envía el correo de cancelación |
+| `pending` | `confirmed` | Reservado para un flujo de pago: el ticket nacería `pending` reteniendo el cupo y pasaría a `confirmed` al acreditarse el pago. **No está implementado**: ninguna ruta crea ni confirma tickets `pending` |
+| `pending` | `cancelled` | Misma ruta de cancelación (un `pending` es un ticket activo). Sería también el destino de un pago que no se acredita |
+| `cancelled` | — | Estado final: no se reactiva. Para volver, el usuario se inscribe de nuevo y obtiene otro ticket con otro código |
+
+`pending` existe en el `enum` porque la consigna lo pide y el resto del sistema ya lo trata de forma
+coherente: cuenta como activo para los cupos, bloquea la inscripción duplicada y se puede cancelar.
 
 ### Flujo de inscripción (`POST /api/events/:eid/tickets`)
 
@@ -379,17 +399,26 @@ Cancelación **lógica**: `status = cancelled` y `cancelledAt = ahora`; el docum
 `my-tickets` y en el listado del evento como historial). Reglas: el ticket existe (`404`), pertenece a
 quien pide o quien pide es `admin` (`403` si no; el organizador del evento tampoco puede), y no está ya
 cancelado (`409`). La escritura exige que el ticket siga activo, así dos cancelaciones simultáneas no se
-pisan. No hay `DELETE`.
+pisan. No hay `DELETE`. Tras persistir la cancelación se envía el **correo de cancelación** al dueño del
+ticket, sin bloquear la respuesta.
 
-### Correo de confirmación (Nodemailer)
+### Correos de confirmación y de cancelación (Nodemailer)
 
-Al confirmar una inscripción se envía al email del usuario de la sesión un correo con el título del
-evento, fecha y hora (zona `America/Santiago`), lugar, cantidad de lugares y el `reservationCode`.
+`MailService` (`src/services/mail.service.js`) envía dos notificaciones con el mismo transporte:
+
+| Correo | Método | Cuándo | Destinatario | Contenido |
+|--------|--------|--------|--------------|-----------|
+| Confirmación | `enviarConfirmacionInscripcion` | `POST /api/events/:eid/tickets` responde `201` | Usuario de la sesión | Título del evento, fecha y hora (zona `America/Santiago`), lugar, cantidad de lugares y `reservationCode` |
+| Cancelación | `enviarCancelacionInscripcion` | `PATCH /api/tickets/:tid/cancel` responde `200` | **Dueño del ticket**, también cuando lo cancela un admin | Título y fecha del evento, `reservationCode` y aviso de que el cupo quedó libre |
+
+Ambos llevan versión HTML y texto plano, se envían después de guardar el cambio y nunca bloquean ni
+hacen fallar la petición.
 El transporte se configura solo con variables de entorno (`MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
 `MAIL_PASS`, `MAIL_FROM`; ver `.env.example`): no hay credenciales en el código. Sin `MAIL_HOST`, se
 usa el transporte `jsonTransport` de Nodemailer: el correo se arma igual y se registra en la consola
 del servidor, pero no sale a la red (útil para desarrollar y para la suite de tests). Si el SMTP
-falla, la inscripción **igual responde `201`**: el ticket ya está guardado y el error queda en el log.
+falla, la inscripción **igual responde `201`** y la cancelación `200`: el cambio ya está guardado y el
+error queda en el log.
 Para probar con un buzón real sin cuenta propia: [Ethereal](https://ethereal.email) entrega host,
 usuario y clave de prueba y muestra los correos recibidos en su web.
 
@@ -412,7 +441,7 @@ usuario y clave de prueba y muestra los correos recibidos en su web.
 | POST | `/api/events/:eid/tickets` | Inscribirse a un evento publicado (envía correo) | `auth` + reglas de cupo/estado en el servicio | `201` con el ticket · `400` · `401` · `404` · `409` |
 | GET | `/api/tickets/my-tickets` | Mis inscripciones, con el evento poblado | `auth` | `200` con la lista · `401` |
 | GET | `/api/events/:eid/tickets` | Inscritos y cupos de un evento (organizer dueño o admin) | `auth`, `authorize(organizer, admin)` + propiedad en el servicio | `200` · `400` · `401` · `403` · `404` |
-| PATCH | `/api/tickets/:tid/cancel` | Cancelar una inscripción (dueño del ticket o admin) | `auth` + propiedad en el servicio | `200` con el ticket · `400` · `401` · `403` · `404` · `409` |
+| PATCH | `/api/tickets/:tid/cancel` | Cancelar una inscripción (dueño del ticket o admin; envía correo) | `auth` + propiedad en el servicio | `200` con el ticket · `400` · `401` · `403` · `404` · `409` |
 
 Formato de respuesta: éxito `{ "status": "success", "payload": ... }` o
 `{ "status": "success", "message": "..." }`; listados paginados
@@ -715,7 +744,8 @@ pending, cancelled`.
 
 ### `PATCH /api/tickets/:tid/cancel`
 
-Protegida con `auth`; sin body. Response `200` con el ticket cancelado:
+Protegida con `auth`; sin body. Envía el correo de cancelación al dueño del ticket. Response `200` con
+el ticket cancelado:
 
 ```json
 { "status": "success", "payload": { "id": "66a1...", "user": "665f2a...", "event": "6690...", "status": "cancelled", "quantity": 2, "reservationCode": "AUR-7K3MQ9XZ", "createdAt": "...", "cancelledAt": "2026-11-08T20:30:00.000Z" } }
@@ -1004,9 +1034,9 @@ Cada archivo de tests levanta su propio MongoDB en memoria, por eso el script lo
 (`--test-concurrency=4`): en una máquina con poca memoria, lanzar los trece a la vez puede agotar el
 tiempo de conexión.
 
-164 tests con MongoDB en memoria. Los 132 heredados siguen pasando sin cambios (autenticación,
+165 tests con MongoDB en memoria. Los 132 heredados siguen pasando sin cambios (autenticación,
 roles, `/api/users`, eventos con reglas, estados y listado); la tabla 401/403 suma las cuatro rutas
-de tickets. Los 32 nuevos cubren esta entrega:
+de tickets. Los 33 nuevos cubren esta entrega:
 
 - `test/tickets.test.js`: inscripción exitosa → `201` con ticket `confirmed`, código con formato
   `AUR-XXXXXXXX` y **un correo** al email del inscrito con asunto, código, lugar y cantidad (el
@@ -1019,7 +1049,8 @@ de tickets. Los 32 nuevos cubren esta entrega:
   índice único parcial rechaza el duplicado en la base y deja pasar al cancelado; si el SMTP falla la
   inscripción igual responde `201`. Cancelación: propia → `200` con `cancelledAt` y el documento se
   conserva; libera el cupo (la siguiente inscripción funciona); ticket ajeno como `user` → `403` sin
-  cambios; el organizador del evento tampoco, el `admin` sí; dos veces → `409`; inexistente → `404`.
+  cambios; el organizador del evento tampoco, el `admin` sí; dos veces → `409`; inexistente → `404`;
+  al cancelar llega **un correo de cancelación al dueño del ticket** (también si cancela un admin).
 - `test/tickets-cupos.test.js`: nunca se confirman más lugares que la capacidad y los cancelados
   no cuentan (secuencia 2+2, rechazo de 2 con 1 libre, llenado, cancelación y reocupación);
   **8 inscripciones simultáneas a 3 cupos → exactamente 3 confirmadas**, sin sobreventa y sin
@@ -1234,7 +1265,7 @@ coderhouse-backend2-preentrega7/
 │   ├── services/
 │   │   ├── events.service.js         # reglas: obligatorios, fecha futura, cupo/precio, propiedad, estados, filtros/paginación
 │   │   ├── tickets.service.js        # inscripción (evento publicado, duplicados, cupos, recuento), cancelación lógica, listados
-│   │   ├── mail.service.js           # arma y envía el correo de confirmación; un fallo se registra, no rompe la inscripción
+│   │   ├── mail.service.js           # arma y envía los correos de confirmación y cancelación; un fallo se registra, no rompe la operación
 │   │   └── users.service.js          # administración: listar usuarios, asignar rol válido
 │   ├── repositories/
 │   │   ├── events.repository.js      # buscar paginado, getById, updateById condicional; devuelve DTOs
