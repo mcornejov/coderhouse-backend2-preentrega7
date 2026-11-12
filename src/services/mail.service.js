@@ -26,6 +26,34 @@ export default class MailService {
   }
 
   /**
+   * Correo de cancelación de inscripción. Mismas garantías que la confirmación: nunca lanza.
+   * @param {{ destinatario: string, ticket: object, evento: object }} datos
+   * @returns {Promise<boolean>}
+   */
+  async enviarCancelacionInscripcion({ destinatario, ticket, evento }) {
+    const fecha = FORMATO_FECHA.format(new Date(evento.date));
+    const mensaje = {
+      from: this.from,
+      to: destinatario,
+      subject: `Inscripción cancelada: ${evento.title}`,
+      text: [
+        `Tu inscripción a "${evento.title}" (${fecha}) quedó cancelada.`,
+        '',
+        `Código de reserva: ${ticket.reservationCode}`,
+        'El cupo quedó disponible para otras personas. Si cambias de idea y hay lugar, puedes volver a inscribirte desde la plataforma.',
+        '',
+        'Café Aurora',
+      ].join('\n'),
+      html: `
+        <p>Tu inscripción a <strong>${escaparHtml(evento.title)}</strong> (${escaparHtml(fecha)}) quedó cancelada.</p>
+        <p>Código de reserva: <strong>${escaparHtml(ticket.reservationCode)}</strong></p>
+        <p>El cupo quedó disponible para otras personas. Si cambias de idea y hay lugar, puedes volver a inscribirte desde la plataforma.</p>
+        <p>Café Aurora</p>`,
+    };
+    return this.#enviar(mensaje, `cancelación (${ticket.reservationCode})`);
+  }
+
+  /**
    * Correo de confirmación de inscripción. Devuelve true si el transporte aceptó el mensaje,
    * false si falló (ya registrado); nunca lanza.
    * @param {{ destinatario: string, ticket: object, evento: object }} datos
@@ -63,14 +91,19 @@ export default class MailService {
         <p>Café Aurora</p>`,
     };
 
+    return this.#enviar(mensaje, `confirmación (${ticket.reservationCode})`);
+  }
+
+  // Envía y registra el resultado. Un fallo del transporte se informa como false, nunca como excepción.
+  async #enviar(mensaje, descripcion) {
     try {
       await this.transporter.sendMail(mensaje);
       logInfo(this.configured
-        ? `Correo de confirmación enviado a ${destinatario} (${ticket.reservationCode})`
-        : `Correo de confirmación para ${destinatario} (${ticket.reservationCode}) registrado sin enviar: MAIL_HOST no configurado`);
+        ? `Correo de ${descripcion} enviado a ${mensaje.to}`
+        : `Correo de ${descripcion} para ${mensaje.to} registrado sin enviar: MAIL_HOST no configurado`);
       return true;
     } catch (error) {
-      logError(`No se pudo enviar el correo de confirmación a ${destinatario} (${ticket.reservationCode}): ${error.message}`);
+      logError(`No se pudo enviar el correo de ${descripcion} a ${mensaje.to}: ${error.message}`);
       return false;
     }
   }
