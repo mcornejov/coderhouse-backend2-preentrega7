@@ -276,6 +276,25 @@ describe('PATCH /api/tickets/:tid/cancel (cancelación)', () => {
     assert.equal(porAdmin.body.payload.status, 'cancelled');
   });
 
+  test('al cancelar se envía un correo de cancelación al dueño del ticket (también si cancela un admin)', async () => {
+    const organizer = await crearUsuarioConRol('organizer');
+    const admin = await crearUsuarioConRol('admin');
+    const user = await crearUsuarioConRol('user', 'carla@mail.com');
+    const evento = await crearEventoPublicado(organizer);
+    const ticket = (await inscribir(evento.id, user)).body.payload;
+    enviados.length = 0;
+
+    await cancelar(ticket.id, admin);
+    // El aviso no bloquea la respuesta: se resuelve en segundo plano tras consultar dueño y evento
+    for (let intentos = 0; enviados.length === 0 && intentos < 50; intentos++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(enviados.length, 1);
+    assert.equal(enviados[0].to, 'carla@mail.com', 'el aviso va al dueño, no al admin');
+    assert.equal(enviados[0].subject, `Inscripción cancelada: ${eventoValido.title}`);
+    assert.match(enviados[0].text, new RegExp(ticket.reservationCode));
+  });
+
   test('cancelar dos veces → 409', async () => {
     const organizer = await crearUsuarioConRol('organizer');
     const user = await crearUsuarioConRol('user');

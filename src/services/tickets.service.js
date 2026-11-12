@@ -4,7 +4,7 @@ import { ESTADOS_TICKET, ESTADOS_ACTIVOS, QUANTITY_MIN, QUANTITY_MAX, esEstadoTi
 import { BadRequestError, NotFoundError, ForbiddenError, ConflictError } from '../utils/errors.util.js';
 import { generarCodigoReserva } from '../utils/reservationCode.util.js';
 
-// Intentos de generar un código de reserva no repetido (la colisión es improbable: 32^8)
+// Intentos de generar un código de reserva no repetido (la colisión es improbable: 31^8 combinaciones)
 const INTENTOS_CODIGO = 3;
 
 // Capa de negocio de las inscripciones. No conoce HTTP ni Mongoose. Códigos que lanza:
@@ -14,12 +14,14 @@ export default class TicketsService {
   /**
    * @param {object} ticketsRepository
    * @param {object} eventsRepository   para cargar el evento al que se inscribe
-   * @param {object} mailService        notificaciones (enviarConfirmacionInscripcion)
+   * @param {object} usersRepository    para avisar al dueño del ticket cuando lo cancela un admin
+   * @param {object} mailService        notificaciones (confirmación y cancelación)
    * @param {{ ahora?: () => Date }} [opciones] reloj inyectable para las reglas temporales
    */
-  constructor(ticketsRepository, eventsRepository, mailService, { ahora = () => new Date() } = {}) {
+  constructor(ticketsRepository, eventsRepository, usersRepository, mailService, { ahora = () => new Date() } = {}) {
     this.tickets = ticketsRepository;
     this.events = eventsRepository;
+    this.users = usersRepository;
     this.mail = mailService;
     this.ahora = ahora;
   }
@@ -129,7 +131,25 @@ export default class TicketsService {
       if (!actual) throw new NotFoundError(`No existe un ticket con id ${ticketId}`);
       throw new ConflictError('El ticket ya está cancelado');
     }
+
+    // Aviso al dueño del ticket (aunque lo haya cancelado un admin), sin bloquear la respuesta
+    this.#notificarCancelacion(cancelado, usuario);
     return cancelado;
+  }
+
+  // Resuelve destinatario y evento y envía el correo de cancelación. Cualquier fallo queda
+  // dentro: la cancelación ya está persistida y no depende de la notificación.
+  async #notificarCancelacion(ticket, solicitante) {
+    try {
+      const esDuenio = ticket.user === solicitante.id;
+      const destinatario = esDuenio ? solicitante.email : (await this.users.findById(ticket.user))?.email;
+      const evento = await this.events.getById(ticket.event);
+      if (destinatario && evento) {
+        await this.mail.enviarCancelacionInscripcion({ destinatario, ticket, evento });
+      }
+    } catch {
+      // El correo es secundario: la cancelación ya se respondió al cliente
+    }
   }
 
   // --- Reglas ---

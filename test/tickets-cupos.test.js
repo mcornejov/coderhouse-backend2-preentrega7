@@ -76,7 +76,7 @@ describe('Control de cupos', () => {
     };
     const events = { getById: async () => ({ id: 'e1', title: 'T', date: '2030-01-01', location: 'L', status: 'published', capacity: 1, organizer: 'o' }) };
     const mail = { enviarConfirmacionInscripcion: async () => true };
-    const service = new TicketsService(tickets, events, mail);
+    const service = new TicketsService(tickets, events, {}, mail);
     await assert.rejects(service.inscribir('e1', {}, { id: 'u1', email: 'u@x.com', role: 'user' }), {
       status: 409,
       message: 'El evento no tiene cupos disponibles',
@@ -95,7 +95,7 @@ describe('Control de cupos', () => {
     const events = { getById: async () => ({ id: 'e1', title: 'T', date: '2030-01-01', location: 'L', status: 'published', capacity: 10, organizer: 'o' }) };
     let destinatario = null;
     const mail = { enviarConfirmacionInscripcion: async ({ destinatario: d }) => { orden.push('correo'); destinatario = d; return true; } };
-    const ticket = await new TicketsService(tickets, events, mail).inscribir('e1', { quantity: 2 }, { id: 'u1', email: 'ana@mail.com', role: 'user' });
+    const ticket = await new TicketsService(tickets, events, {}, mail).inscribir('e1', { quantity: 2 }, { id: 'u1', email: 'ana@mail.com', role: 'user' });
     assert.deepEqual(orden, ['persistido', 'correo']);
     assert.equal(destinatario, 'ana@mail.com');
     assert.equal(ticket.quantity, 2);
